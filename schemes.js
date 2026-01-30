@@ -1,4 +1,6 @@
 // Random number schemes configuration
+// Note: Generators use crypto.getRandomValues() when available for cryptographically secure randomness.
+// This accurately represents how real-world implementations generate these identifiers.
 const SCHEMES = {
     // UUIDs
     uuid_v4: {
@@ -12,11 +14,17 @@ const SCHEMES = {
             if (typeof crypto !== 'undefined' && crypto.randomUUID) {
                 return crypto.randomUUID();
             }
-            return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
-                const r = Math.random() * 16 | 0;
-                const v = c === 'x' ? r : (r & 0x3 | 0x8);
-                return v.toString(16);
-            });
+            // Fallback using crypto.getRandomValues for cryptographic security
+            if (typeof crypto !== 'undefined' && crypto.getRandomValues) {
+                const bytes = new Uint8Array(16);
+                crypto.getRandomValues(bytes);
+                // Set version 4 and variant bits per RFC 4122
+                bytes[6] = (bytes[6] & 0x0f) | 0x40;
+                bytes[8] = (bytes[8] & 0x3f) | 0x80;
+                const hex = Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('');
+                return hex.slice(0, 8) + '-' + hex.slice(8, 12) + '-' + hex.slice(12, 16) + '-' + hex.slice(16, 20) + '-' + hex.slice(20);
+            }
+            throw new Error('Secure random UUID v4 generation is not supported in this environment.');
         }
     },
 
@@ -24,17 +32,35 @@ const SCHEMES = {
         name: 'UUID v1',
         emoji: '⏰',
         category: 'Identifiers',
-        description: 'Time-based UUID using timestamp and MAC address. Less random than v4, includes temporal information.',
-        bits: 61, // Approximation - clock sequence and node have some randomness
+        description: 'Time-based UUID using timestamp and MAC address. Timestamp is predictable; effective random entropy is ~14 bits (clock sequence).',
+        bits: 14, // Only clock sequence is truly random; timestamp and node are predictable/generated
         format: 'xxxxxxxx-xxxx-1xxx-yxxx-xxxxxxxxxxxx',
         generate: function() {
-            const now = Date.now();
-            const uuid100ns = (now * 10000) + 122192928000000000;
-            const timeLow = (uuid100ns & 0xffffffff).toString(16).padStart(8, '0');
-            const timeMid = ((uuid100ns >> 32) & 0xffff).toString(16).padStart(4, '0');
-            const timeHi = (((uuid100ns >> 48) & 0x0fff) | 0x1000).toString(16).padStart(4, '0');
-            const clockSeq = ((Math.random() * 0x3fff | 0) | 0x8000).toString(16).padStart(4, '0');
-            const node = Array.from({length: 6}, () => Math.floor(Math.random() * 256).toString(16).padStart(2, '0')).join('');
+            // Use BigInt for proper 64-bit arithmetic
+            const now = BigInt(Date.now());
+            const uuid100ns = (now * 10000n) + 122192928000000000n;
+            const timeLow = (uuid100ns & 0xffffffffn).toString(16).padStart(8, '0');
+            const timeMid = ((uuid100ns >> 32n) & 0xffffn).toString(16).padStart(4, '0');
+            const timeHi = (((uuid100ns >> 48n) & 0x0fffn) | 0x1000n).toString(16).padStart(4, '0');
+            // Use crypto for clock sequence
+            let clockSeqRand;
+            if (typeof crypto !== 'undefined' && crypto.getRandomValues) {
+                const arr = new Uint16Array(1);
+                crypto.getRandomValues(arr);
+                clockSeqRand = arr[0] & 0x3fff;
+            } else {
+                clockSeqRand = Math.floor(Math.random() * 0x3fff);
+            }
+            const clockSeq = ((clockSeqRand) | 0x8000).toString(16).padStart(4, '0');
+            // Generate random node (MAC-like)
+            let nodeBytes;
+            if (typeof crypto !== 'undefined' && crypto.getRandomValues) {
+                nodeBytes = new Uint8Array(6);
+                crypto.getRandomValues(nodeBytes);
+            } else {
+                nodeBytes = Array.from({length: 6}, () => Math.floor(Math.random() * 256));
+            }
+            const node = Array.from(nodeBytes).map(b => b.toString(16).padStart(2, '0')).join('');
             return `${timeLow}-${timeMid}-${timeHi}-${clockSeq}-${node}`;
         }
     },
@@ -43,16 +69,28 @@ const SCHEMES = {
         name: 'UUID v7',
         emoji: '📅',
         category: 'Identifiers',
-        description: 'Unix timestamp-based UUID (draft standard). Sortable and time-ordered while maintaining randomness.',
-        bits: 74, // 48 bits timestamp + 74 random bits - fixed bits
+        description: 'Unix timestamp-based UUID (draft standard). 48 bits are predictable timestamp; effective random entropy is ~74 bits.',
+        bits: 74, // 122 total random bits - 48 timestamp bits = 74 effective random bits
         format: 'xxxxxxxx-xxxx-7xxx-yxxx-xxxxxxxxxxxx',
         generate: function() {
             const now = Date.now();
             const hex = now.toString(16).padStart(12, '0');
             const timePart = hex.slice(0, 8) + '-' + hex.slice(8, 12);
-            const randA = (Math.random() * 0x0fff | 0x7000).toString(16).padStart(4, '0');
-            const randB = (Math.random() * 0x3fff | 0x8000).toString(16).padStart(4, '0');
-            const randC = Array.from({length: 12}, () => Math.floor(Math.random() * 16).toString(16)).join('');
+            // Use crypto for random portions
+            let randA, randB, randC;
+            if (typeof crypto !== 'undefined' && crypto.getRandomValues) {
+                const arr = new Uint16Array(2);
+                crypto.getRandomValues(arr);
+                randA = ((arr[0] & 0x0fff) | 0x7000).toString(16).padStart(4, '0');
+                randB = ((arr[1] & 0x3fff) | 0x8000).toString(16).padStart(4, '0');
+                const randBytes = new Uint8Array(6);
+                crypto.getRandomValues(randBytes);
+                randC = Array.from(randBytes).map(b => b.toString(16).padStart(2, '0')).join('');
+            } else {
+                randA = (Math.floor(Math.random() * 0x0fff) | 0x7000).toString(16).padStart(4, '0');
+                randB = (Math.floor(Math.random() * 0x3fff) | 0x8000).toString(16).padStart(4, '0');
+                randC = Array.from({length: 12}, () => Math.floor(Math.random() * 16).toString(16)).join('');
+            }
             return `${timePart}-${randA}-${randB}-${randC}`;
         }
     },
@@ -66,6 +104,11 @@ const SCHEMES = {
         bits: 128,
         format: 'xxxx:xxxx:xxxx:xxxx:xxxx:xxxx:xxxx:xxxx',
         generate: function() {
+            if (typeof crypto !== 'undefined' && crypto.getRandomValues) {
+                const bytes = new Uint16Array(8);
+                crypto.getRandomValues(bytes);
+                return Array.from(bytes).map(b => b.toString(16).padStart(4, '0')).join(':');
+            }
             const segments = [];
             for (let i = 0; i < 8; i++) {
                 segments.push(Math.floor(Math.random() * 0x10000).toString(16).padStart(4, '0'));
@@ -82,6 +125,11 @@ const SCHEMES = {
         bits: 32,
         format: 'xxx.xxx.xxx.xxx',
         generate: function() {
+            if (typeof crypto !== 'undefined' && crypto.getRandomValues) {
+                const bytes = new Uint8Array(4);
+                crypto.getRandomValues(bytes);
+                return Array.from(bytes).join('.');
+            }
             return Array.from({length: 4}, () => Math.floor(Math.random() * 256)).join('.');
         }
     },
@@ -94,7 +142,14 @@ const SCHEMES = {
         bits: 48,
         format: 'XX:XX:XX:XX:XX:XX',
         generate: function() {
-            const bytes = Array.from({length: 6}, () => Math.floor(Math.random() * 256));
+            let bytes;
+            if (typeof crypto !== 'undefined' && crypto.getRandomValues) {
+                bytes = new Uint8Array(6);
+                crypto.getRandomValues(bytes);
+                bytes = Array.from(bytes);
+            } else {
+                bytes = Array.from({length: 6}, () => Math.floor(Math.random() * 256));
+            }
             // Set locally administered bit, clear multicast bit
             bytes[0] = (bytes[0] | 0x02) & 0xfe;
             return bytes.map(b => b.toString(16).padStart(2, '0').toUpperCase()).join(':');
@@ -106,14 +161,22 @@ const SCHEMES = {
         name: 'Bitcoin Address',
         emoji: '₿',
         category: 'Cryptocurrency',
-        description: 'Bitcoin wallet address (P2PKH format). Derived from 256-bit private key through multiple hashes.',
+        description: 'Bitcoin wallet address (P2PKH format, simplified). Real addresses use Base58Check with checksum validation.',
         bits: 160, // RIPEMD-160 hash
         format: '1xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx',
         generate: function() {
             const chars = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
             let address = '1';
-            for (let i = 0; i < 33; i++) {
-                address += chars[Math.floor(Math.random() * chars.length)];
+            if (typeof crypto !== 'undefined' && crypto.getRandomValues) {
+                const bytes = new Uint8Array(33);
+                crypto.getRandomValues(bytes);
+                for (let i = 0; i < 33; i++) {
+                    address += chars[bytes[i] % chars.length];
+                }
+            } else {
+                for (let i = 0; i < 33; i++) {
+                    address += chars[Math.floor(Math.random() * chars.length)];
+                }
             }
             return address;
         }
@@ -128,8 +191,14 @@ const SCHEMES = {
         format: '0x' + 'x'.repeat(40),
         generate: function() {
             let address = '0x';
-            for (let i = 0; i < 40; i++) {
-                address += Math.floor(Math.random() * 16).toString(16);
+            if (typeof crypto !== 'undefined' && crypto.getRandomValues) {
+                const bytes = new Uint8Array(20);
+                crypto.getRandomValues(bytes);
+                address += Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('');
+            } else {
+                for (let i = 0; i < 40; i++) {
+                    address += Math.floor(Math.random() * 16).toString(16);
+                }
             }
             return address;
         }
@@ -146,8 +215,16 @@ const SCHEMES = {
         generate: function() {
             // Generate Visa-style card
             let digits = [4]; // Visa starts with 4
-            for (let i = 1; i < 15; i++) {
-                digits.push(Math.floor(Math.random() * 10));
+            if (typeof crypto !== 'undefined' && crypto.getRandomValues) {
+                const bytes = new Uint8Array(14);
+                crypto.getRandomValues(bytes);
+                for (let i = 0; i < 14; i++) {
+                    digits.push(bytes[i] % 10);
+                }
+            } else {
+                for (let i = 1; i < 15; i++) {
+                    digits.push(Math.floor(Math.random() * 10));
+                }
             }
             // Calculate Luhn checksum
             let sum = 0;
@@ -169,17 +246,27 @@ const SCHEMES = {
         name: 'IBAN',
         emoji: '🏦',
         category: 'Financial',
-        description: 'International Bank Account Number. Country-specific format with checksum validation.',
+        description: 'International Bank Account Number (simplified). Real IBANs use MOD 97 checksum validation.',
         bits: 62, // Varies by country, using German IBAN as reference
         format: 'CCXX XXXX XXXX XXXX XXXX XX',
         generate: function() {
-            // Generate German-style IBAN
+            // Generate German-style IBAN (simplified - real IBANs use MOD 97 checksum)
             const countryCode = 'DE';
-            const bankCode = String(Math.floor(Math.random() * 100000000)).padStart(8, '0');
-            const accountNum = String(Math.floor(Math.random() * 10000000000)).padStart(10, '0');
+            let bankCode, accountNum, checkDigits;
+            if (typeof crypto !== 'undefined' && crypto.getRandomValues) {
+                const bytes = new Uint8Array(10);
+                crypto.getRandomValues(bytes);
+                bankCode = Array.from(bytes.slice(0, 4)).map(b => b % 10).join('').padStart(8, '0');
+                accountNum = Array.from(bytes.slice(4, 10)).map(b => b % 10).join('').padStart(10, '0');
+                const checkByte = new Uint8Array(1);
+                crypto.getRandomValues(checkByte);
+                checkDigits = String((checkByte[0] % 98) + 2).padStart(2, '0');
+            } else {
+                bankCode = String(Math.floor(Math.random() * 100000000)).padStart(8, '0');
+                accountNum = String(Math.floor(Math.random() * 10000000000)).padStart(10, '0');
+                checkDigits = String(Math.floor(Math.random() * 98) + 2).padStart(2, '0');
+            }
             const bban = bankCode + accountNum;
-            // Simplified check digits (not real IBAN checksum)
-            const checkDigits = String(Math.floor(Math.random() * 98) + 2).padStart(2, '0');
             const iban = countryCode + checkDigits + bban;
             return iban.replace(/(.{4})/g, '$1 ').trim();
         }
@@ -194,9 +281,18 @@ const SCHEMES = {
         bits: 46, // ~50 bits minus TAC and checksum
         format: 'XX-XXXXXX-XXXXXX-X',
         generate: function() {
-            // TAC (Type Allocation Code) - using a realistic range
-            const tac = String(35000000 + Math.floor(Math.random() * 5000000)).slice(0, 8);
-            const serial = String(Math.floor(Math.random() * 1000000)).padStart(6, '0');
+            let tac, serial;
+            if (typeof crypto !== 'undefined' && crypto.getRandomValues) {
+                const bytes = new Uint8Array(7);
+                crypto.getRandomValues(bytes);
+                // TAC (Type Allocation Code) - using a realistic range
+                const tacNum = 35000000 + (bytes[0] * 65536 + bytes[1] * 256 + bytes[2]) % 5000000;
+                tac = String(tacNum).slice(0, 8);
+                serial = Array.from(bytes.slice(3)).map(b => b % 10).join('').padStart(6, '0');
+            } else {
+                tac = String(35000000 + Math.floor(Math.random() * 5000000)).slice(0, 8);
+                serial = String(Math.floor(Math.random() * 1000000)).padStart(6, '0');
+            }
             const digits = (tac + serial).split('').map(Number);
             // Luhn checksum
             let sum = 0;
@@ -218,20 +314,47 @@ const SCHEMES = {
         name: 'VIN',
         emoji: '🚗',
         category: 'Hardware',
-        description: 'Vehicle Identification Number. 17-character code identifying cars, with check digit.',
+        description: 'Vehicle Identification Number. 17-character code identifying cars, with proper check digit.',
         bits: 58, // Complex encoding reduces entropy
         format: 'XXXXXXXXXXXXXXXXX',
         generate: function() {
             const chars = 'ABCDEFGHJKLMNPRSTUVWXYZ0123456789'; // No I, O, Q
-            let vin = '';
-            for (let i = 0; i < 17; i++) {
-                if (i === 8) {
-                    vin += 'X'; // Check digit position (simplified)
-                } else {
-                    vin += chars[Math.floor(Math.random() * chars.length)];
+            // VIN transliteration map (ISO 3779)
+            const transliteration = {
+                A: 1, B: 2, C: 3, D: 4, E: 5, F: 6, G: 7, H: 8,
+                J: 1, K: 2, L: 3, M: 4, N: 5, P: 7, R: 9,
+                S: 2, T: 3, U: 4, V: 5, W: 6, X: 7, Y: 8, Z: 9,
+                '0': 0, '1': 1, '2': 2, '3': 3, '4': 4,
+                '5': 5, '6': 6, '7': 7, '8': 8, '9': 9
+            };
+            // Weights for positions 1–17
+            const weights = [8, 7, 6, 5, 4, 3, 2, 10, 0, 9, 8, 7, 6, 5, 4, 3, 2];
+            
+            // Generate base VIN characters
+            let vinChars;
+            if (typeof crypto !== 'undefined' && crypto.getRandomValues) {
+                const bytes = new Uint8Array(17);
+                crypto.getRandomValues(bytes);
+                vinChars = Array.from(bytes).map(b => chars[b % chars.length]);
+            } else {
+                vinChars = [];
+                for (let i = 0; i < 17; i++) {
+                    vinChars[i] = chars[Math.floor(Math.random() * chars.length)];
                 }
             }
-            return vin;
+            
+            // Calculate check digit
+            let sum = 0;
+            for (let i = 0; i < 17; i++) {
+                const ch = vinChars[i];
+                const value = transliteration[ch] !== undefined ? transliteration[ch] : 0;
+                sum += value * weights[i];
+            }
+            const remainder = sum % 11;
+            // Position 9 (index 8) is the check digit
+            vinChars[8] = remainder === 10 ? 'X' : String(remainder);
+            
+            return vinChars.join('');
         }
     },
 
@@ -245,9 +368,18 @@ const SCHEMES = {
         format: 'XXX-X-XXXXX-XXX-X',
         generate: function() {
             const prefix = '978';
-            const group = String(Math.floor(Math.random() * 10));
-            const publisher = String(Math.floor(Math.random() * 100000)).padStart(5, '0');
-            const title = String(Math.floor(Math.random() * 1000)).padStart(3, '0');
+            let group, publisher, title;
+            if (typeof crypto !== 'undefined' && crypto.getRandomValues) {
+                const bytes = new Uint8Array(9);
+                crypto.getRandomValues(bytes);
+                group = String(bytes[0] % 10);
+                publisher = Array.from(bytes.slice(1, 6)).map(b => b % 10).join('').padStart(5, '0');
+                title = Array.from(bytes.slice(6, 9)).map(b => b % 10).join('').padStart(3, '0');
+            } else {
+                group = String(Math.floor(Math.random() * 10));
+                publisher = String(Math.floor(Math.random() * 100000)).padStart(5, '0');
+                title = String(Math.floor(Math.random() * 1000)).padStart(3, '0');
+            }
             const digits = (prefix + group + publisher + title).split('').map(Number);
             // Calculate check digit
             let sum = 0;
@@ -270,12 +402,22 @@ const SCHEMES = {
         format: '+X XXX XXX XXXX',
         generate: function() {
             const countryCodes = ['1', '44', '49', '33', '81', '86', '91'];
-            const country = countryCodes[Math.floor(Math.random() * countryCodes.length)];
-            const remaining = 15 - country.length - 1;
-            let number = '';
-            for (let i = 0; i < remaining; i++) {
-                number += Math.floor(Math.random() * 10);
+            let countryIdx, number;
+            if (typeof crypto !== 'undefined' && crypto.getRandomValues) {
+                const bytes = new Uint8Array(14);
+                crypto.getRandomValues(bytes);
+                countryIdx = bytes[0] % countryCodes.length;
+                number = Array.from(bytes.slice(1)).map(b => b % 10).join('');
+            } else {
+                countryIdx = Math.floor(Math.random() * countryCodes.length);
+                number = '';
+                for (let i = 0; i < 13; i++) {
+                    number += Math.floor(Math.random() * 10);
+                }
             }
+            const country = countryCodes[countryIdx];
+            const remaining = 15 - country.length - 1;
+            number = number.slice(0, remaining);
             return `+${country} ${number.slice(0,3)} ${number.slice(3,6)} ${number.slice(6)}`;
         }
     },
@@ -289,6 +431,11 @@ const SCHEMES = {
         bits: 24,
         format: '#XXXXXX',
         generate: function() {
+            if (typeof crypto !== 'undefined' && crypto.getRandomValues) {
+                const bytes = new Uint8Array(3);
+                crypto.getRandomValues(bytes);
+                return '#' + Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('').toUpperCase();
+            }
             const color = Math.floor(Math.random() * 0xffffff);
             return '#' + color.toString(16).padStart(6, '0').toUpperCase();
         }
@@ -326,11 +473,19 @@ const SCHEMES = {
         format: 'apikey_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx',
         generate: function() {
             const prefixes = ['apikey_', 'token_', 'key_', 'secret_'];
-            const prefix = prefixes[Math.floor(Math.random() * prefixes.length)];
             const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-            let key = prefix;
-            for (let i = 0; i < 32; i++) {
-                key += chars[Math.floor(Math.random() * chars.length)];
+            let key;
+            if (typeof crypto !== 'undefined' && crypto.getRandomValues) {
+                const bytes = new Uint8Array(33);
+                crypto.getRandomValues(bytes);
+                const prefix = prefixes[bytes[0] % prefixes.length];
+                key = prefix + Array.from(bytes.slice(1)).map(b => chars[b % chars.length]).join('');
+            } else {
+                const prefix = prefixes[Math.floor(Math.random() * prefixes.length)];
+                key = prefix;
+                for (let i = 0; i < 32; i++) {
+                    key += chars[Math.floor(Math.random() * chars.length)];
+                }
             }
             return key;
         }
@@ -344,6 +499,11 @@ const SCHEMES = {
         bits: 128,
         format: 'x'.repeat(32),
         generate: function() {
+            if (typeof crypto !== 'undefined' && crypto.getRandomValues) {
+                const bytes = new Uint8Array(16);
+                crypto.getRandomValues(bytes);
+                return Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('');
+            }
             let id = '';
             for (let i = 0; i < 32; i++) {
                 id += Math.floor(Math.random() * 16).toString(16);
@@ -360,6 +520,12 @@ const SCHEMES = {
         bits: 20, // ~20 bits for 6 decimal digits
         format: 'XXXXXX',
         generate: function() {
+            if (typeof crypto !== 'undefined' && crypto.getRandomValues) {
+                const bytes = new Uint8Array(3);
+                crypto.getRandomValues(bytes);
+                const num = (bytes[0] * 65536 + bytes[1] * 256 + bytes[2]) % 1000000;
+                return String(num).padStart(6, '0');
+            }
             return String(Math.floor(Math.random() * 1000000)).padStart(6, '0');
         }
     },
@@ -374,6 +540,11 @@ const SCHEMES = {
         format: 'xxxxxxxxxxxxxxxxxxxxx',
         generate: function() {
             const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-';
+            if (typeof crypto !== 'undefined' && crypto.getRandomValues) {
+                const bytes = new Uint8Array(21);
+                crypto.getRandomValues(bytes);
+                return Array.from(bytes).map(b => alphabet[b % 64]).join('');
+            }
             let id = '';
             for (let i = 0; i < 21; i++) {
                 id += alphabet[Math.floor(Math.random() * 64)];
