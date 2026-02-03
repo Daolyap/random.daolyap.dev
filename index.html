@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Random Number Visualizer - Understanding Modern Randomness</title>
+    <link rel="stylesheet" href="styles.css">
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎲</text></svg>">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🎲 Random Number Visualizer</h1>
+            <p class="subtitle">Explore how modern systems generate random identifiers and understand their security through brute-force simulation</p>
+        </header>
+
+        <main>
+            <section class="scheme-selection">
+                <h2>Select Random Scheme</h2>
+                <div class="scheme-grid" id="schemeGrid">
+                    <!-- Schemes will be populated by JavaScript -->
+                </div>
+            </section>
+
+            <section class="scheme-info" id="schemeInfo" style="display: none;">
+                <div class="info-card">
+                    <h3 id="schemeName"></h3>
+                    <p id="schemeDescription"></p>
+                    <div class="info-stats">
+                        <div class="stat">
+                            <span class="stat-label">Bit Entropy</span>
+                            <span class="stat-value" id="bitEntropy"></span>
+                        </div>
+                        <div class="stat">
+                            <span class="stat-label">Possible Combinations</span>
+                            <span class="stat-value" id="combinations"></span>
+                        </div>
+                        <div class="stat">
+                            <span class="stat-label">Format</span>
+                            <span class="stat-value" id="format"></span>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <section class="generator" id="generator" style="display: none;">
+                <h2>Generate & Crack</h2>
+                
+                <div class="target-section">
+                    <div class="target-display">
+                        <label>Target Value</label>
+                        <div class="target-value" id="targetValue">Click "Generate Target" to start</div>
+                    </div>
+                    <button class="btn btn-primary" id="generateBtn">🎯 Generate Target</button>
+                </div>
+
+                <div class="controls">
+                    <div class="control-group">
+                        <label for="workerCount">Parallel Workers</label>
+                        <input type="range" id="workerCount" min="1" max="16" value="4">
+                        <span id="workerCountDisplay">4</span>
+                    </div>
+                    <div class="control-group">
+                        <label for="speedLimit">Generations per Worker (per batch)</label>
+                        <input type="range" id="speedLimit" min="100" max="100000" value="10000" step="100">
+                        <span id="speedLimitDisplay">10,000</span>
+                    </div>
+                    <div class="control-group">
+                        <label for="maxAttempts">Max Total Attempts</label>
+                        <select id="maxAttempts">
+                            <option value="1000000">1 Million</option>
+                            <option value="10000000">10 Million</option>
+                            <option value="100000000">100 Million</option>
+                            <option value="1000000000" selected>1 Billion</option>
+                            <option value="10000000000">10 Billion</option>
+                            <option value="100000000000">100 Billion</option>
+                            <option value="1000000000000">1 Trillion</option>
+                            <option value="0">Unlimited (until match)</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="estimation" id="estimation">
+                    <h3>⏱️ Time Estimation</h3>
+                    <p id="estimationText">Generate a target to see time estimation</p>
+                </div>
+
+                <div class="action-buttons">
+                    <button class="btn btn-success" id="startBtn" disabled>▶️ Start Brute-Force</button>
+                    <button class="btn btn-danger" id="stopBtn" disabled>⏹️ Stop</button>
+                    <button class="btn btn-secondary" id="resetBtn">🔄 Reset</button>
+                </div>
+            </section>
+
+            <section class="simulation" id="simulation" style="display: none;">
+                <h2>Simulation Progress</h2>
+                
+                <div class="progress-container">
+                    <div class="progress-bar">
+                        <div class="progress-fill" id="progressFill"></div>
+                    </div>
+                    <span class="progress-text" id="progressText">0%</span>
+                </div>
+
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <span class="stat-icon">🔢</span>
+                        <span class="stat-title">Total Attempts</span>
+                        <span class="stat-number" id="totalAttempts">0</span>
+                    </div>
+                    <div class="stat-card">
+                        <span class="stat-icon">⚡</span>
+                        <span class="stat-title">Rate (per second)</span>
+                        <span class="stat-number" id="ratePerSecond">0</span>
+                    </div>
+                    <div class="stat-card">
+                        <span class="stat-icon">⏰</span>
+                        <span class="stat-title">Elapsed Time</span>
+                        <span class="stat-number" id="elapsedTime">0s</span>
+                    </div>
+                    <div class="stat-card">
+                        <span class="stat-icon">📊</span>
+                        <span class="stat-title">Workers Active</span>
+                        <span class="stat-number" id="activeWorkers">0</span>
+                    </div>
+                </div>
+
+                <div class="current-attempts" id="currentAttempts">
+                    <h3>Latest Attempts</h3>
+                    <div class="attempts-list" id="attemptsList">
+                        <!-- Will be populated by JavaScript -->
+                    </div>
+                </div>
+
+                <div class="result" id="result" style="display: none;">
+                    <div class="result-content" id="resultContent"></div>
+                </div>
+            </section>
+        </main>
+
+        <footer>
+            <p>Built to demonstrate the security of modern random number generation</p>
+            <p class="disclaimer">⚠️ This is an educational tool. All simulations run locally in your browser.</p>
+        </footer>
+    </div>
+
+    <script src="schemes.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>
