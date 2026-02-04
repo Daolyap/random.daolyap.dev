@@ -296,7 +296,9 @@ class RandomVisualizer {
             let workerId = 0;
             let batchSize = 10000;
 
-            // Scheme generators included statically to avoid CSP 'unsafe-eval' violation
+            // IMPORTANT: This GENERATORS map must be kept in sync with SCHEMES in schemes.js
+            // When adding a new scheme to SCHEMES, you MUST also add its generator function here.
+            // Failure to do so will cause workers to report an error when selecting that scheme.
             const GENERATORS = {
                 uuid_v4: function() {
                     if (typeof crypto !== 'undefined' && crypto.randomUUID) {
@@ -684,7 +686,12 @@ class RandomVisualizer {
                     // Look up the generate function by scheme key
                     generateFn = GENERATORS[data.schemeKey];
                     if (!generateFn) {
-                        console.error('Unknown scheme key:', data.schemeKey);
+                        // Send error message back to main thread so UI can reflect the failure
+                        self.postMessage({
+                            type: 'error',
+                            error: 'Unknown scheme key: ' + data.schemeKey + '. Make sure the scheme is defined in both SCHEMES (schemes.js) and GENERATORS (app.js createWorkerCode).',
+                            workerId: workerId
+                        });
                         return;
                     }
                     
@@ -739,7 +746,9 @@ class RandomVisualizer {
             return;
         }
 
-        const { type, attempts, lastAttempt, value } = data;
+        const { type, attempts, lastAttempt, value, error, workerId: msgWorkerId } = data;
+        // Use workerId from message data if available, otherwise use the parameter
+        const effectiveWorkerId = msgWorkerId !== undefined ? msgWorkerId : workerId;
         
         if (type === 'progress') {
             this.totalAttempts += attempts;
@@ -747,7 +756,7 @@ class RandomVisualizer {
             // Store last attempts for display
             this.attemptHistory.unshift({
                 value: lastAttempt,
-                workerId: workerId
+                workerId: effectiveWorkerId
             });
             
             // Keep only last 10 attempts
@@ -756,8 +765,18 @@ class RandomVisualizer {
             }
         } else if (type === 'match') {
             this.showResult(true, value);
+        } else if (type === 'error') {
+            // Handle explicit error messages from workers (e.g., unknown scheme key)
+            console.error('Worker error:', error);
+            this.workerErrors.push({ workerId: effectiveWorkerId, error: error || 'Unknown error' });
+            
+            // Update UI to show worker error
+            const activeWorkersEl = document.getElementById('activeWorkers');
+            const activeCount = this.workers.length - this.workerErrors.length;
+            activeWorkersEl.textContent = `${activeCount} (${this.workerErrors.length} failed)`;
+            activeWorkersEl.style.color = this.workerErrors.length > 0 ? '#ef4444' : '';
         } else {
-            console.warn('Received unknown message type from worker', { workerId, type, data });
+            console.warn('Received unknown message type from worker', { workerId: effectiveWorkerId, type, data });
         }
     }
 
