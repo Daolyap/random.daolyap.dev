@@ -157,9 +157,9 @@ class RandomVisualizer {
 
         const reader = new FileReader();
         reader.onload = (event) => {
-            const lines = event.target.result.split(/\r?\n/).map(line => line.trim()).filter(line => line.length > 0);
+            const lines = [...new Set(event.target.result.split(/\r?\n/).map(line => line.trim()).filter(line => line.length > 0))];
             this.wordlistData = lines;
-            infoEl.textContent = `${lines.length.toLocaleString()} entries loaded from ${file.name}`;
+            infoEl.textContent = `${lines.length.toLocaleString()} unique entries loaded from ${file.name}`;
         };
         reader.onerror = () => {
             this.wordlistData = null;
@@ -319,8 +319,7 @@ class RandomVisualizer {
                 batchSize: speedLimit,
                 workerId: i,
                 attackMethod: attackMethod,
-                workerCount: workerCount,
-                schemeBits: scheme.bits
+                workerCount: workerCount
             };
 
             // For wordlist mode, partition lines across workers
@@ -793,6 +792,11 @@ class RandomVisualizer {
                                 error: 'Sequential mode is not supported for scheme: ' + data.schemeKey + '. Use Random mode instead.',
                                 workerId: workerId
                             });
+                            running = false;
+                            self.postMessage({
+                                type: 'exhausted',
+                                workerId: workerId
+                            });
                             return;
                         }
                         const totalSpace = enumerator.totalCount();
@@ -899,8 +903,9 @@ class RandomVisualizer {
                 }
             }
 
-            function runWordlistBatch(words) {
-                if (!running || words.length === 0) {
+            function runWordlistBatch(words, offset) {
+                offset = offset || 0;
+                if (!running || offset >= words.length) {
                     if (running) {
                         self.postMessage({
                             type: 'exhausted',
@@ -912,12 +917,11 @@ class RandomVisualizer {
                 }
 
                 let lastAttempt = null;
-                const batchEnd = Math.min(batchSize, words.length);
-                const batch = words.slice(0, batchEnd);
-                const remaining = words.slice(batchEnd);
+                const batchEnd = Math.min(offset + batchSize, words.length);
+                const count = batchEnd - offset;
 
-                for (let i = 0; i < batch.length; i++) {
-                    const attempt = batch[i];
+                for (let i = offset; i < batchEnd; i++) {
+                    const attempt = words[i];
                     lastAttempt = attempt;
 
                     if (attempt === target) {
@@ -933,15 +937,15 @@ class RandomVisualizer {
 
                 self.postMessage({
                     type: 'progress',
-                    attempts: batch.length,
+                    attempts: count,
                     lastAttempt: lastAttempt,
                     workerId: workerId
                 });
 
                 if (typeof requestIdleCallback === 'function') {
-                    requestIdleCallback(function() { runWordlistBatch(remaining); });
+                    requestIdleCallback(function() { runWordlistBatch(words, batchEnd); });
                 } else {
-                    setTimeout(function() { runWordlistBatch(remaining); }, 0);
+                    setTimeout(function() { runWordlistBatch(words, batchEnd); }, 0);
                 }
             }
         `;
@@ -984,12 +988,17 @@ class RandomVisualizer {
             const activeCount = this.workers.length - this.workerErrors.length;
             activeWorkersEl.textContent = `${activeCount} (${this.workerErrors.length} failed)`;
             activeWorkersEl.style.color = this.workerErrors.length > 0 ? '#ef4444' : '';
+            // If all workers have failed, stop the simulation
+            if (this.workers.length > 0 && this.workerErrors.length >= this.workers.length) {
+                this.showResult(false);
+            }
         } else if (type === 'exhausted') {
             // Worker finished its partition without finding a match
             this.exhaustedWorkers.add(effectiveWorkerId);
-            // If all workers are exhausted, show failure
-            if (this.exhaustedWorkers.size >= this.workers.length) {
-                this.showResult(false);
+            // If all workers are exhausted or have failed, show failure
+            const totalCompletedWorkers = this.exhaustedWorkers.size + this.workerErrors.length;
+            if (this.workers.length > 0 && totalCompletedWorkers >= this.workers.length) {
+                this.showResult(false, null, 'exhausted');
             }
         } else {
             console.warn('Received unknown message type from worker', { workerId: effectiveWorkerId, type, data });
@@ -1108,7 +1117,7 @@ class RandomVisualizer {
         activeWorkersEl.style.color = '';
     }
 
-    showResult(found, matchValue = null) {
+    showResult(found, matchValue = null, reason = 'maxAttempts') {
         this.stopSimulation();
         
         const result = document.getElementById('result');
@@ -1129,9 +1138,12 @@ class RandomVisualizer {
             result.className = 'result failure';
             const scheme = SCHEMES[this.selectedScheme];
             const searchedPercent = (this.totalAttempts / Math.pow(2, scheme.bits)) * 100;
+            const message = reason === 'exhausted'
+                ? 'All workers exhausted their search space without finding a match.'
+                : 'Maximum attempts reached without finding a match.';
             resultContent.innerHTML = `
                 <h3>⏹️ Simulation Stopped</h3>
-                <p>Maximum attempts reached without finding a match.</p>
+                <p>${message}</p>
                 <p>Total attempts: <strong>${this.totalAttempts.toLocaleString()}</strong></p>
                 <p>Search space covered: <strong>${searchedPercent < 0.000001 ? '<0.000001%' : searchedPercent.toFixed(6) + '%'}</strong></p>
                 <p>This demonstrates the security of ${scheme.bits}-bit randomness!</p>
