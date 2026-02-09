@@ -157,7 +157,7 @@ class RandomVisualizer {
 
         const reader = new FileReader();
         reader.onload = (event) => {
-            const lines = event.target.result.split(/\r?\n/).filter(line => line.trim().length > 0);
+            const lines = event.target.result.split(/\r?\n/).map(line => line.trim()).filter(line => line.length > 0);
             this.wordlistData = lines;
             infoEl.textContent = `${lines.length.toLocaleString()} entries loaded from ${file.name}`;
         };
@@ -737,7 +737,7 @@ class RandomVisualizer {
             // Only defined for schemes where exhaustive enumeration is practical.
             const ENUMERATORS = {
                 hex_color: {
-                    totalCount: function() { return 16777216; }, // 2^24
+                    totalCount: function() { return Math.pow(2, 24); },
                     fromIndex: function(i) {
                         return '#' + i.toString(16).padStart(6, '0').toUpperCase();
                     }
@@ -749,7 +749,7 @@ class RandomVisualizer {
                     }
                 },
                 ipv4: {
-                    totalCount: function() { return 4294967296; }, // 2^32
+                    totalCount: function() { return Math.pow(2, 32); },
                     fromIndex: function(i) {
                         return ((i >>> 24) & 255) + '.' + ((i >>> 16) & 255) + '.' + ((i >>> 8) & 255) + '.' + (i & 255);
                     }
@@ -986,7 +986,6 @@ class RandomVisualizer {
             activeWorkersEl.style.color = this.workerErrors.length > 0 ? '#ef4444' : '';
         } else if (type === 'exhausted') {
             // Worker finished its partition without finding a match
-            if (!this.exhaustedWorkers) this.exhaustedWorkers = new Set();
             this.exhaustedWorkers.add(effectiveWorkerId);
             // If all workers are exhausted, show failure
             if (this.exhaustedWorkers.size >= this.workers.length) {
@@ -1048,7 +1047,7 @@ class RandomVisualizer {
         const attemptsList = document.getElementById('attemptsList');
         attemptsList.innerHTML = this.attemptHistory.map(item => `
             <div class="attempt-item">
-                <span class="attempt-value">${item.value}</span>
+                <span class="attempt-value">${this.escapeHtml(item.value)}</span>
                 <span class="worker-id">W${item.workerId}</span>
             </div>
         `).join('');
@@ -1060,6 +1059,12 @@ class RandomVisualizer {
         const hours = Math.floor(seconds / 3600);
         const mins = Math.floor((seconds % 3600) / 60);
         return `${hours}h ${mins}m`;
+    }
+
+    escapeHtml(str) {
+        const div = document.createElement('div');
+        div.appendChild(document.createTextNode(String(str)));
+        return div.innerHTML;
     }
 
     stopSimulation() {
@@ -1116,7 +1121,7 @@ class RandomVisualizer {
             resultContent.innerHTML = `
                 <h3>🎉 Match Found!</h3>
                 <p>Successfully brute-forced the target value!</p>
-                <div class="match-value">${matchValue}</div>
+                <div class="match-value">${this.escapeHtml(matchValue)}</div>
                 <p>Total attempts: <strong>${this.totalAttempts.toLocaleString()}</strong></p>
                 <p>Time taken: <strong>${this.formatElapsedTime((Date.now() - this.startTime) / 1000)}</strong></p>
             `;
