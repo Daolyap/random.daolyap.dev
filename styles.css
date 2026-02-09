@@ -323,6 +323,36 @@ section h2 {
     font-weight: 600;
 }
 
+/* Method Hint */
+.method-hint {
+    font-size: 0.8rem;
+    color: var(--text-muted);
+    font-style: italic;
+}
+
+/* File Input */
+.control-group input[type="file"] {
+    padding: 0.5rem;
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    color: var(--text-primary);
+    font-size: 0.9rem;
+    cursor: pointer;
+    width: 100%;
+}
+
+.control-group input[type="file"]::file-selector-button {
+    padding: 0.4rem 0.8rem;
+    background: var(--accent-primary);
+    border: none;
+    border-radius: 4px;
+    color: white;
+    font-size: 0.85rem;
+    cursor: pointer;
+    margin-right: 0.75rem;
+}
+
 /* Estimation */
 .estimation {
     background: var(--bg-card);

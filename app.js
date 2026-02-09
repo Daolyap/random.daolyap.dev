@@ -12,6 +12,7 @@ class RandomVisualizer {
         this.updateInterval = null;
         this.maxAttemptsCheck = null;
         this.workerErrors = [];
+        this.wordlistData = null;
         
         this.init();
     }
@@ -111,11 +112,60 @@ class RandomVisualizer {
         document.getElementById('maxAttempts').addEventListener('change', () => {
             this.updateEstimation();
         });
+
+        // Attack method
+        document.getElementById('attackMethod').addEventListener('change', (e) => {
+            this.updateAttackMethodUI(e.target.value);
+            this.updateEstimation();
+        });
+
+        // Wordlist file
+        document.getElementById('wordlistFile').addEventListener('change', (e) => {
+            this.handleWordlistUpload(e);
+        });
     }
 
     updateControlDisplays() {
         document.getElementById('workerCountDisplay').textContent = document.getElementById('workerCount').value;
         document.getElementById('speedLimitDisplay').textContent = parseInt(document.getElementById('speedLimit').value).toLocaleString();
+    }
+
+    updateAttackMethodUI(method) {
+        const wordlistGroup = document.getElementById('wordlistGroup');
+        const speedLimitGroup = document.getElementById('speedLimitGroup');
+        const methodHint = document.getElementById('methodHint');
+
+        wordlistGroup.style.display = method === 'wordlist' ? 'flex' : 'none';
+        speedLimitGroup.style.display = method === 'wordlist' ? 'none' : '';
+
+        const hints = {
+            sequential: 'Workers partition the search space — no duplicates',
+            random: 'Workers generate random values independently',
+            wordlist: 'Each worker tests a portion of the uploaded wordlist'
+        };
+        methodHint.textContent = hints[method] || '';
+    }
+
+    handleWordlistUpload(e) {
+        const file = e.target.files[0];
+        const infoEl = document.getElementById('wordlistInfo');
+        if (!file) {
+            this.wordlistData = null;
+            infoEl.textContent = 'No file selected';
+            return;
+        }
+
+        const reader = new FileReader();
+        reader.onload = (event) => {
+            const lines = event.target.result.split(/\r?\n/).filter(line => line.trim().length > 0);
+            this.wordlistData = lines;
+            infoEl.textContent = `${lines.length.toLocaleString()} entries loaded from ${file.name}`;
+        };
+        reader.onerror = () => {
+            this.wordlistData = null;
+            infoEl.textContent = 'Error reading file';
+        };
+        reader.readAsText(file);
     }
 
     generateTarget() {
@@ -218,11 +268,20 @@ class RandomVisualizer {
     startSimulation() {
         if (!this.targetValue || this.isRunning) return;
 
+        const attackMethod = document.getElementById('attackMethod').value;
+
+        // Validate wordlist mode
+        if (attackMethod === 'wordlist' && (!this.wordlistData || this.wordlistData.length === 0)) {
+            alert('Please upload a wordlist file first.');
+            return;
+        }
+
         this.isRunning = true;
         this.startTime = Date.now();
         this.totalAttempts = 0;
         this.attemptHistory = [];
         this.workerErrors = [];
+        this.exhaustedWorkers = new Set();
 
         // Update UI
         document.getElementById('startBtn').disabled = true;
@@ -236,6 +295,7 @@ class RandomVisualizer {
         const workerCount = parseInt(document.getElementById('workerCount').value);
         const speedLimit = parseInt(document.getElementById('speedLimit').value);
         const maxAttempts = parseInt(document.getElementById('maxAttempts').value);
+        const scheme = SCHEMES[this.selectedScheme];
 
         this.workers = [];
         this.blobUrls = [];
@@ -252,14 +312,26 @@ class RandomVisualizer {
             
             this.workers.push(worker);
             
-            // Start worker - only send schemeKey (workers have generators built-in to avoid CSP issues)
-            worker.postMessage({
+            const msg = {
                 type: 'start',
                 schemeKey: this.selectedScheme,
                 target: this.targetValue,
                 batchSize: speedLimit,
-                workerId: i
-            });
+                workerId: i,
+                attackMethod: attackMethod,
+                workerCount: workerCount,
+                schemeBits: scheme.bits
+            };
+
+            // For wordlist mode, partition lines across workers
+            if (attackMethod === 'wordlist') {
+                const chunkSize = Math.ceil(this.wordlistData.length / workerCount);
+                const start = i * chunkSize;
+                const end = Math.min(start + chunkSize, this.wordlistData.length);
+                msg.wordlistChunk = this.wordlistData.slice(start, end);
+            }
+
+            worker.postMessage(msg);
         }
 
         // Update UI periodically
@@ -661,6 +733,29 @@ class RandomVisualizer {
                 }
             };
 
+            // Sequential enumerators: convert an integer index to a formatted value.
+            // Only defined for schemes where exhaustive enumeration is practical.
+            const ENUMERATORS = {
+                hex_color: {
+                    totalCount: function() { return 16777216; }, // 2^24
+                    fromIndex: function(i) {
+                        return '#' + i.toString(16).padStart(6, '0').toUpperCase();
+                    }
+                },
+                otp_6: {
+                    totalCount: function() { return 1000000; },
+                    fromIndex: function(i) {
+                        return String(i).padStart(6, '0');
+                    }
+                },
+                ipv4: {
+                    totalCount: function() { return 4294967296; }, // 2^32
+                    fromIndex: function(i) {
+                        return ((i >>> 24) & 255) + '.' + ((i >>> 16) & 255) + '.' + ((i >>> 8) & 255) + '.' + (i & 255);
+                    }
+                }
+            };
+
             self.onmessage = function(e) {
                 // Validate message structure
                 if (!e || !e.data || typeof e.data !== 'object') {
@@ -683,19 +778,42 @@ class RandomVisualizer {
                     workerId = data.workerId || 0;
                     batchSize = data.batchSize || 10000;
                     
-                    // Look up the generate function by scheme key
-                    generateFn = GENERATORS[data.schemeKey];
-                    if (!generateFn) {
-                        // Send error message back to main thread so UI can reflect the failure
-                        self.postMessage({
-                            type: 'error',
-                            error: 'Unknown scheme key: ' + data.schemeKey + '. Make sure the scheme is defined in both SCHEMES (schemes.js) and GENERATORS (app.js createWorkerCode).',
-                            workerId: workerId
-                        });
-                        return;
+                    const attackMethod = data.attackMethod || 'random';
+
+                    if (attackMethod === 'wordlist') {
+                        // Wordlist mode: iterate over provided chunk
+                        const chunk = data.wordlistChunk || [];
+                        runWordlistBatch(chunk);
+                    } else if (attackMethod === 'sequential') {
+                        // Sequential mode: enumerate the search space with no duplicates
+                        const enumerator = ENUMERATORS[data.schemeKey];
+                        if (!enumerator) {
+                            self.postMessage({
+                                type: 'error',
+                                error: 'Sequential mode is not supported for scheme: ' + data.schemeKey + '. Use Random mode instead.',
+                                workerId: workerId
+                            });
+                            return;
+                        }
+                        const totalSpace = enumerator.totalCount();
+                        const workerCount = data.workerCount || 1;
+                        const perWorker = Math.ceil(totalSpace / workerCount);
+                        const startIdx = workerId * perWorker;
+                        const endIdx = Math.min(startIdx + perWorker, totalSpace);
+                        runSequentialBatch(enumerator, startIdx, endIdx);
+                    } else {
+                        // Random mode
+                        generateFn = GENERATORS[data.schemeKey];
+                        if (!generateFn) {
+                            self.postMessage({
+                                type: 'error',
+                                error: 'Unknown scheme key: ' + data.schemeKey + '. Make sure the scheme is defined in both SCHEMES (schemes.js) and GENERATORS (app.js createWorkerCode).',
+                                workerId: workerId
+                            });
+                            return;
+                        }
+                        runBatch();
                     }
-                    
-                    runBatch();
                 } else if (type === 'stop') {
                     running = false;
                 }
@@ -733,6 +851,97 @@ class RandomVisualizer {
                     requestIdleCallback(runBatch);
                 } else {
                     setTimeout(runBatch, 0);
+                }
+            }
+
+            function runSequentialBatch(enumerator, startIdx, endIdx) {
+                if (!running || startIdx >= endIdx) {
+                    if (running) {
+                        self.postMessage({
+                            type: 'exhausted',
+                            workerId: workerId
+                        });
+                        running = false;
+                    }
+                    return;
+                }
+
+                let lastAttempt = null;
+                const batchEnd = Math.min(startIdx + batchSize, endIdx);
+                const count = batchEnd - startIdx;
+
+                for (let i = startIdx; i < batchEnd; i++) {
+                    const attempt = enumerator.fromIndex(i);
+                    lastAttempt = attempt;
+
+                    if (attempt === target) {
+                        self.postMessage({
+                            type: 'match',
+                            value: attempt,
+                            workerId: workerId
+                        });
+                        running = false;
+                        return;
+                    }
+                }
+
+                self.postMessage({
+                    type: 'progress',
+                    attempts: count,
+                    lastAttempt: lastAttempt,
+                    workerId: workerId
+                });
+
+                if (typeof requestIdleCallback === 'function') {
+                    requestIdleCallback(function() { runSequentialBatch(enumerator, batchEnd, endIdx); });
+                } else {
+                    setTimeout(function() { runSequentialBatch(enumerator, batchEnd, endIdx); }, 0);
+                }
+            }
+
+            function runWordlistBatch(words) {
+                if (!running || words.length === 0) {
+                    if (running) {
+                        self.postMessage({
+                            type: 'exhausted',
+                            workerId: workerId
+                        });
+                        running = false;
+                    }
+                    return;
+                }
+
+                let lastAttempt = null;
+                const batchEnd = Math.min(batchSize, words.length);
+                const batch = words.slice(0, batchEnd);
+                const remaining = words.slice(batchEnd);
+
+                for (let i = 0; i < batch.length; i++) {
+                    const attempt = batch[i];
+                    lastAttempt = attempt;
+
+                    if (attempt === target) {
+                        self.postMessage({
+                            type: 'match',
+                            value: attempt,
+                            workerId: workerId
+                        });
+                        running = false;
+                        return;
+                    }
+                }
+
+                self.postMessage({
+                    type: 'progress',
+                    attempts: batch.length,
+                    lastAttempt: lastAttempt,
+                    workerId: workerId
+                });
+
+                if (typeof requestIdleCallback === 'function') {
+                    requestIdleCallback(function() { runWordlistBatch(remaining); });
+                } else {
+                    setTimeout(function() { runWordlistBatch(remaining); }, 0);
                 }
             }
         `;
@@ -775,6 +984,14 @@ class RandomVisualizer {
             const activeCount = this.workers.length - this.workerErrors.length;
             activeWorkersEl.textContent = `${activeCount} (${this.workerErrors.length} failed)`;
             activeWorkersEl.style.color = this.workerErrors.length > 0 ? '#ef4444' : '';
+        } else if (type === 'exhausted') {
+            // Worker finished its partition without finding a match
+            if (!this.exhaustedWorkers) this.exhaustedWorkers = new Set();
+            this.exhaustedWorkers.add(effectiveWorkerId);
+            // If all workers are exhausted, show failure
+            if (this.exhaustedWorkers.size >= this.workers.length) {
+                this.showResult(false);
+            }
         } else {
             console.warn('Received unknown message type from worker', { workerId: effectiveWorkerId, type, data });
         }
@@ -922,6 +1139,7 @@ class RandomVisualizer {
         this.targetValue = null;
         this.totalAttempts = 0;
         this.attemptHistory = [];
+        this.exhaustedWorkers = new Set();
         
         document.getElementById('targetValue').textContent = 'Click "Generate Target" to start';
         document.getElementById('startBtn').disabled = true;
